@@ -54,6 +54,8 @@ class RecommendationTest(unittest.TestCase):
                         "date": date.strftime("%Y-%m-%d"),
                         "code": code,
                         "name": f"股票{code}",
+                        "industry": "通信设备" if code == "600498" else "电子",
+                        "concepts": "算力;5G;光通信" if code == "600498" else "芯片",
                         "open": close - 0.1,
                         "high": close + 0.2,
                         "low": close - 0.2,
@@ -71,6 +73,40 @@ class RecommendationTest(unittest.TestCase):
         self.assertEqual(rec.code, "600498")
         self.assertIn("推荐理由", rec.message)
         self.assertIn("600498", rec.message)
+        self.assertIn("名称：股票600498", rec.message)
+        self.assertIn("行业：通信设备", rec.message)
+        self.assertIn("概念题材：算力、5G、光通信", rec.message)
+        self.assertIn("近5日交易量", rec.message)
+        self.assertIn("近5日成交额", rec.message)
+
+    def test_recommendation_uses_fixed_metadata_fallback(self) -> None:
+        dates = pd.bdate_range("2026-01-01", periods=70)
+        rows = []
+        for idx, date in enumerate(dates):
+            close = 30 + idx * 0.2
+            rows.append(
+                {
+                    "date": date.strftime("%Y-%m-%d"),
+                    "code": "688820",
+                    "name": "688820",
+                    "open": close - 0.1,
+                    "high": close + 0.2,
+                    "low": close - 0.2,
+                    "close": close,
+                    "volume": 1_000_000 + idx * 10_000,
+                    "amount": close * 1_000_000,
+                    "pe": 15,
+                    "pb": 2,
+                    "roe": 16,
+                }
+            )
+
+        rec = recommend_one_stock(pd.DataFrame(rows), ["688820"], as_of=dates[-1].strftime("%Y-%m-%d"))
+
+        self.assertIn("名称：盛合晶微", rec.message)
+        self.assertIn("行业：半导体", rec.message)
+        self.assertIn("概念题材：先进封装、集成电路", rec.message)
+        self.assertNotIn("行业：数据源未提供", rec.message)
 
 
 if __name__ == "__main__":
