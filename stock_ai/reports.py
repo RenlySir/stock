@@ -70,8 +70,20 @@ def format_wechat_summary(result: BacktestResult) -> str:
         latest = result.trades.tail(5)
         lines.append("最近交易：")
         for row in latest.to_dict("records"):
-            pnl = row.get("pnl", 0)
-            lines.append(f"- {row['date']} {row['side']} {row['code']} {row.get('name', '')} {row['shares']}股 PnL={float(pnl):,.0f}")
+            side = str(row["side"])
+            if side == "BUY":
+                lines.append(
+                    f"- {row['date']} 买入：{row['code']} {row.get('name', '')}，"
+                    f"买入价：{float(row['price']):.2f}，数量：{int(row['shares'])}股，"
+                    f"金额：{float(row['amount']):,.0f}"
+                )
+            else:
+                lines.append(
+                    f"- {row['date']} 卖出：{row['code']} {row.get('name', '')}，"
+                    f"卖出价：{float(row['price']):.2f}，数量：{int(row['shares'])}股，"
+                    f"本笔盈亏：{float(row.get('pnl', 0)):,.0f}，"
+                    f"收益率：{float(row.get('return_pct', 0)) * 100:.2f}%"
+                )
     return "\n".join(lines)
 
 

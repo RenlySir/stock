@@ -5,6 +5,7 @@ import unittest
 
 from stock_ai.backtest import BacktestConfig, run_backtest
 from stock_ai.optimizer import optimize_strategy
+from stock_ai.reports import format_wechat_summary
 
 
 def sample_bars() -> pd.DataFrame:
@@ -101,6 +102,31 @@ class BacktestEngineTest(unittest.TestCase):
         assert result.best is not None
         self.assertGreaterEqual(result.best.summary["ending_equity"], 1_000_000)
         self.assertEqual(len(result.runs), 8)
+
+    def test_wechat_summary_includes_trade_side_stock_and_price(self) -> None:
+        result = run_backtest(
+            sample_bars(),
+            BacktestConfig(
+                start_date="2026-02-02",
+                end_date="2026-04-15",
+                initial_cash=1_000_000,
+                top_n=1,
+                min_score=30,
+                max_hold_days=20,
+                fee_rate=0,
+                tax_rate=0,
+                slippage_bps=0,
+            ),
+        )
+
+        message = format_wechat_summary(result)
+
+        self.assertIn("初始资金：1,000,000", message)
+        self.assertIn("买入：", message)
+        self.assertIn("卖出：", message)
+        self.assertIn("买入价：", message)
+        self.assertIn("卖出价：", message)
+        self.assertIn("强势股", message)
 
 
 if __name__ == "__main__":
