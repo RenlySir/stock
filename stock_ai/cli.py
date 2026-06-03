@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .backtest import BacktestConfig, run_backtest
 from .factors import load_market_csv
-from .notifier import send_wechat
+from .notifier import ReliableWeChatSender
 from .optimizer import optimize_strategy
 from .reports import format_trade_alerts, format_wechat_summary, save_backtest_outputs, save_optimization_outputs
 from .strategy import StrategyConfig, select_candidates
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--cc-connect", default="/Users/lan/.nvm/versions/node/v23.7.0/bin/cc-connect")
     backtest.add_argument("--wechat-project", default="daily-market-news")
     backtest.add_argument("--wechat-session", default="weixin:dm:o9cq808Zm6pkjw0mJxDT8kaN4pKo@im.wechat")
+    backtest.add_argument("--wechat-outbox", default="output/stock_ai/wechat_outbox")
 
     opt = sub.add_parser("optimize", help="search strategy parameters and save the best run")
     opt.add_argument("--csv", required=True)
@@ -51,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--cc-connect", default="/Users/lan/.nvm/versions/node/v23.7.0/bin/cc-connect")
     daily.add_argument("--wechat-project", default="daily-market-news")
     daily.add_argument("--wechat-session", default="weixin:dm:o9cq808Zm6pkjw0mJxDT8kaN4pKo@im.wechat")
+    daily.add_argument("--wechat-outbox", default="output/stock_ai/wechat_outbox")
     return parser
 
 
@@ -79,19 +81,19 @@ def main() -> int:
         save_backtest_outputs(result, Path(args.output_dir))
         print(format_wechat_summary(result))
         if args.wechat:
-            for alert in format_trade_alerts(result, args.end_date):
-                send_wechat(
-                    alert,
-                    cc_connect=Path(args.cc_connect),
-                    project=args.wechat_project,
-                    session=args.wechat_session,
-                )
-            send_wechat(
-                format_wechat_summary(result),
+            sender = ReliableWeChatSender(
                 cc_connect=Path(args.cc_connect),
                 project=args.wechat_project,
                 session=args.wechat_session,
+                outbox_dir=Path(args.wechat_outbox),
             )
+            flushed = sender.flush_outbox()
+            print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
+            for alert in format_trade_alerts(result, args.end_date):
+                ok = sender.send_or_queue(alert, kind="trade")
+                print(f"wechat trade alert {'sent' if ok else 'queued'}")
+            ok = sender.send_or_queue(format_wechat_summary(result), kind="summary")
+            print(f"wechat summary {'sent' if ok else 'queued'}")
         return 0
     if args.command == "optimize":
         result = optimize_strategy(
@@ -112,9 +114,19 @@ def main() -> int:
         save_backtest_outputs(result, Path(args.output_dir))
         message = format_wechat_summary(result)
         print(message)
+        sender = ReliableWeChatSender(
+            cc_connect=Path(args.cc_connect),
+            project=args.wechat_project,
+            session=args.wechat_session,
+            outbox_dir=Path(args.wechat_outbox),
+        )
+        flushed = sender.flush_outbox()
+        print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
         for alert in format_trade_alerts(result, args.end_date):
-            send_wechat(alert, cc_connect=Path(args.cc_connect), project=args.wechat_project, session=args.wechat_session)
-        send_wechat(message, cc_connect=Path(args.cc_connect), project=args.wechat_project, session=args.wechat_session)
+            ok = sender.send_or_queue(alert, kind="trade")
+            print(f"wechat trade alert {'sent' if ok else 'queued'}")
+        ok = sender.send_or_queue(message, kind="summary")
+        print(f"wechat summary {'sent' if ok else 'queued'}")
         return 0
     raise ValueError(args.command)
 
