@@ -13,6 +13,7 @@ from .optimizer import optimize_strategy
 from .realtime import DEFAULT_REALTIME_CODES, SinaQuoteProvider, run_realtime_monitor
 from .recommendation import recommend_one_stock
 from .reports import format_trade_alerts, format_wechat_summary, save_backtest_outputs, save_optimization_outputs
+from .storage import StockDatabase
 from .strategy import StrategyConfig, select_candidates
 
 
@@ -55,7 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
     evolve.add_argument("--horizon", type=int, default=5)
     evolve.add_argument("--top-n", type=int, default=5)
     evolve.add_argument("--codes", default="")
+    evolve.add_argument("--db-path", default="data/stock_ai.sqlite")
     evolve.add_argument("--output-dir", default="output/stock_ai/operators")
+
+    sync = sub.add_parser("sync-history", help="fetch fixed stock histories and store them in SQLite")
+    sync.add_argument("--codes", default=",".join(DEFAULT_REALTIME_CODES))
+    sync.add_argument("--start-date", default="2025-01-01")
+    sync.add_argument("--end-date", default=default_history_end())
+    sync.add_argument("--history-cache-dir", default="data/cache")
+    sync.add_argument("--db-path", default="data/stock_ai.sqlite")
 
     daily = sub.add_parser("daily-summary", help="run backtest through today and send a WeChat summary")
     daily.add_argument("--csv", required=True)
@@ -82,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--codes", default=",".join(DEFAULT_REALTIME_CODES))
     rec.add_argument("--history-start", default="2025-01-01")
     rec.add_argument("--history-cache-dir", default="data/cache")
+    rec.add_argument("--db-path", default="data/stock_ai.sqlite")
     rec.add_argument("--output-dir", default="output/stock_ai/recommendation")
     rec.add_argument("--operator-weights", default="output/stock_ai/operators/operator_weights.json")
     rec.add_argument("--cc-connect", default="/usr/local/bin/cc-connect")
@@ -160,8 +170,13 @@ def main() -> int:
     if args.command == "evolve-operators":
         bars = load_market_csv(args.csv)
         codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
+        if codes:
+            db_bars = StockDatabase(Path(args.db_path)).load_daily_bars(codes, start_date="1900-01-01", end_date=args.as_of)
+            if not db_bars.empty:
+                bars = db_bars
         result = evolve_operators(bars, as_of=args.as_of, horizon=args.horizon, top_n=args.top_n, codes=codes or None)
         saved = save_operator_evolution(result, Path(args.output_dir))
+        StockDatabase(Path(args.db_path)).save_operator_evolution(result)
         print(f"saved operator weights to {saved['weights']}")
         print(f"saved operator scores to {saved['scores']}")
         print(f"operator universe: {','.join(result.codes)}")
@@ -170,6 +185,17 @@ def main() -> int:
                 f"{score.name}: weight={score.weight:.4f} ic={score.ic:.4f} "
                 f"top_return={score.top_quantile_return:.4f} hit_rate={score.hit_rate:.2f}"
             )
+        return 0
+    if args.command == "sync-history":
+        codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
+        bars = load_or_fetch_histories(
+            codes,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            cache_dir=Path(args.history_cache_dir),
+        )
+        count = StockDatabase(Path(args.db_path)).upsert_daily_bars(bars)
+        print(f"synced {count} daily bars to {args.db_path}")
         return 0
     if args.command == "daily-summary":
         bars = load_market_csv(args.csv)
@@ -213,15 +239,19 @@ def main() -> int:
     if args.command == "recommend-daily":
         bars = load_market_csv(args.csv)
         codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
-        fixed_bars = bars[bars["code"].astype(str).str.zfill(6).isin(codes)]
-        if fixed_bars.empty:
+        db = StockDatabase(Path(args.db_path))
+        db_bars = db.load_daily_bars(codes, start_date=args.history_start, end_date=args.as_of)
+        fixed_bars = db_bars if not db_bars.empty else bars[bars["code"].astype(str).str.zfill(6).isin(codes)]
+        if fixed_bars.empty or fixed_bars["date"].max() < args.as_of:
             fixed_bars = load_or_fetch_histories(
                 codes,
                 start_date=args.history_start,
                 end_date=args.as_of if args.as_of else default_history_end(),
                 cache_dir=Path(args.history_cache_dir),
             )
+            db.upsert_daily_bars(fixed_bars)
         rec = recommend_one_stock(fixed_bars, codes, as_of=args.as_of, operator_weights_path=args.operator_weights)
+        db.save_recommendation(as_of=args.as_of, recommendation=rec)
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / f"recommendation_{args.as_of}.txt").write_text(rec.message, encoding="utf-8")

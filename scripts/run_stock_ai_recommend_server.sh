@@ -17,6 +17,7 @@ python run_stock_ai.py recommend-daily \
   --csv profile_input_20260508.csv \
   --as-of "$AS_OF" \
   --codes 600498,688820,300803 \
+  --db-path data/stock_ai.sqlite \
   --operator-weights output/stock_ai/operators/operator_weights.json \
   --output-dir output/stock_ai/recommendation \
   --cc-connect /usr/local/bin/cc-connect \

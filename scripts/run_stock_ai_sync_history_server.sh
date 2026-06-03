@@ -12,12 +12,9 @@ PY
 then
   exit 0
 fi
-AS_OF="$(date +%F)"
-python run_stock_ai.py evolve-operators \
-  --csv profile_input_20260508.csv \
-  --as-of "$AS_OF" \
-  --horizon 5 \
-  --top-n 5 \
+python run_stock_ai.py sync-history \
   --codes 600498,688820,300803 \
-  --db-path data/stock_ai.sqlite \
-  --output-dir output/stock_ai/operators
+  --start-date 2025-01-01 \
+  --end-date "$(date +%F)" \
+  --history-cache-dir data/cache \
+  --db-path data/stock_ai.sqlite
