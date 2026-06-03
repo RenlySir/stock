@@ -12,6 +12,7 @@
 - 微信通知：通过本机 `cc-connect` 向配置的微信会话发送买卖和日报摘要。
 - 明日大盘预测：盘后综合主要指数、资金线索和市场新闻关键词，生成次日大盘观点并微信发送。
 - SQLite 本地存储：固定股票池日线、每日推荐、算子权重和评分会写入本地轻量数据库，减少重复拉取。
+- 策略自更新：盘后用固定三只股票历史数据回测参数网格，以盈利为主、回撤和过度交易为惩罚项，保存最佳策略配置。
 - 每日 15:00：可用 `cron` 或 `launchd` 调用 `scripts/run_stock_ai_daily.sh`。
 
 ## 运行示例
@@ -66,6 +67,16 @@ python3 run_stock_ai.py sync-history \
   --db-path data/stock_ai.sqlite
 ```
 
+自动更新策略参数：
+
+```bash
+python3 run_stock_ai.py auto-update-strategy \
+  --codes 600498,688820,300803 \
+  --start-date 2025-01-01 \
+  --end-date 2026-06-03 \
+  --db-path data/stock_ai.sqlite
+```
+
 发送微信日报：
 
 ```bash
@@ -101,6 +112,7 @@ macOS/Linux cron 示例：
 - `operator_scores.csv`：每个候选算子的 IC、前分位未来收益、命中率和样本数。
 - `market_outlook_YYYY-MM-DD.txt`：每日 15:10 发送的明日大盘预测观点。
 - `data/stock_ai.sqlite`：SQLite 数据库，存储日线、推荐记录、算子权重和评分。
+- `output/stock_ai/strategy_auto_update/strategy_config.json`：自更新选出的最佳策略参数。
 
 ## 注意
 

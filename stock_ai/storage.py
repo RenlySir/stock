@@ -210,6 +210,35 @@ class StockDatabase:
             ).fetchone()
         return dict(row) if row is not None else {}
 
+    def save_strategy_config(self, config: dict[str, Any]) -> None:
+        as_of = str(config["as_of"])
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO strategy_configs(as_of, config_json, score, created_at)
+                VALUES (?, ?, ?, datetime('now', 'localtime'))
+                ON CONFLICT(as_of) DO UPDATE SET
+                    config_json=excluded.config_json,
+                    score=excluded.score,
+                    created_at=excluded.created_at
+                """,
+                (as_of, json.dumps(config, ensure_ascii=False), _number(config.get("objective_score"))),
+            )
+
+    def load_latest_strategy_config(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT config_json
+                FROM strategy_configs
+                ORDER BY as_of DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return {}
+        return dict(json.loads(row["config_json"]))
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(
@@ -273,6 +302,13 @@ class StockDatabase:
                     top_positive_terms_json TEXT NOT NULL,
                     top_negative_terms_json TEXT NOT NULL,
                     summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS strategy_configs (
+                    as_of TEXT PRIMARY KEY,
+                    config_json TEXT NOT NULL,
+                    score REAL NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 """

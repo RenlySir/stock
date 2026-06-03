@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import pandas as pd
 
+from .auto_update import auto_update_strategy
 from .backtest import BacktestConfig, run_backtest
 from .factors import load_market_csv
 from .history import default_history_end, load_or_fetch_histories
@@ -65,6 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--end-date", default=default_history_end())
     sync.add_argument("--history-cache-dir", default="data/cache")
     sync.add_argument("--db-path", default="data/stock_ai.sqlite")
+
+    autoupdate = sub.add_parser("auto-update-strategy", help="backtest fixed stock pool and save best strategy config")
+    autoupdate.add_argument("--codes", default=",".join(DEFAULT_REALTIME_CODES))
+    autoupdate.add_argument("--start-date", required=True)
+    autoupdate.add_argument("--end-date", required=True)
+    autoupdate.add_argument("--lookback-days", type=int, default=180)
+    autoupdate.add_argument("--db-path", default="data/stock_ai.sqlite")
+    autoupdate.add_argument("--output-dir", default="output/stock_ai/strategy_auto_update")
 
     daily = sub.add_parser("daily-summary", help="run backtest through today and send a WeChat summary")
     daily.add_argument("--csv", required=True)
@@ -197,6 +207,24 @@ def main() -> int:
         )
         count = StockDatabase(Path(args.db_path)).upsert_daily_bars(bars)
         print(f"synced {count} daily bars to {args.db_path}")
+        return 0
+    if args.command == "auto-update-strategy":
+        codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
+        start_date = args.start_date
+        if args.lookback_days > 0:
+            start_date = max(
+                pd.to_datetime(args.start_date),
+                pd.to_datetime(args.end_date) - pd.Timedelta(days=args.lookback_days),
+            ).strftime("%Y-%m-%d")
+        result = auto_update_strategy(
+            StockDatabase(Path(args.db_path)),
+            codes=codes,
+            start_date=start_date,
+            end_date=args.end_date,
+            output_dir=Path(args.output_dir),
+        )
+        print(f"saved strategy config to {Path(args.output_dir) / 'strategy_config.json'}")
+        print(f"best score={result.config['score']} ending_equity={result.config['ending_equity']} return={result.config['return_pct']}")
         return 0
     if args.command == "daily-summary":
         bars = load_market_csv(args.csv)
