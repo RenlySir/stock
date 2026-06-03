@@ -97,16 +97,6 @@ def auto_update_strategy(
     return StrategyUpdateResult(as_of=end_date, best=best, runs=run_rows, config=config_payload)
 
 
-def _objective_score(result: BacktestResult) -> float:
-    ending_equity = float(result.summary["ending_equity"])
-    initial_cash = float(result.summary["initial_cash"])
-    drawdown = abs(float(result.summary["max_drawdown_pct"]))
-    trade_count = int(result.summary["trade_count"])
-    drawdown_penalty = initial_cash * drawdown * 0.35
-    overtrade_penalty = max(trade_count - 30, 0) * 500
-    return ending_equity - drawdown_penalty - overtrade_penalty
-
-
 def _walk_forward_folds(bars: pd.DataFrame, *, min_folds: int = 3) -> list[tuple[str, str]]:
     dates = sorted(str(date) for date in bars["date"].unique())
     if len(dates) < 30:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from stock_ai.realtime import Quote, RealtimeDecisionEngine, is_a_share_market_time
+from stock_ai.realtime import Quote, RealtimeDecisionEngine, is_a_share_market_time, poll_realtime_once
 from stock_ai.recommendation import recommend_one_stock
 
 
@@ -36,6 +38,32 @@ class RealtimeTradingTest(unittest.TestCase):
         assert sell is not None
         self.assertEqual(sell.side, "SELL")
         self.assertEqual(sell.code, code)
+
+    def test_poll_realtime_once_keeps_service_alive_when_quote_provider_fails(self) -> None:
+        class FailingProvider:
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                raise RuntimeError("network down")
+
+        class RecordingSender:
+            def __init__(self) -> None:
+                self.messages: list[str] = []
+
+            def send_or_queue(self, message: str, *, kind: str) -> None:
+                self.messages.append(message)
+
+        with TemporaryDirectory() as tmp:
+            state_log = Path(tmp) / "realtime.log"
+
+            poll_realtime_once(
+                codes=["600498", "688820", "300803"],
+                provider=FailingProvider(),
+                sender=RecordingSender(),
+                engine=RealtimeDecisionEngine(),
+                state_log=state_log,
+            )
+
+            self.assertIn("quote fetch error", state_log.read_text(encoding="utf-8"))
+            self.assertIn("network down", state_log.read_text(encoding="utf-8"))
 
 
 class RecommendationTest(unittest.TestCase):

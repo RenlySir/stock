@@ -190,6 +190,30 @@ class RealtimeDecisionEngine:
         )
 
 
+def poll_realtime_once(
+    *,
+    codes: list[str],
+    provider: SinaQuoteProvider,
+    sender: ReliableWeChatSender,
+    engine: RealtimeDecisionEngine,
+    state_log: Path | None = None,
+) -> None:
+    try:
+        quotes = provider.fetch(codes)
+    except Exception as exc:
+        if state_log is not None:
+            state_log.parent.mkdir(parents=True, exist_ok=True)
+            state_log.write_text(
+                f"quote fetch error: {type(exc).__name__}: {exc}\n",
+                encoding="utf-8",
+            )
+        return
+    for quote in quotes:
+        decision = engine.on_quote(quote)
+        if decision is not None:
+            sender.send_or_queue(decision.message(), kind="realtime_trade")
+
+
 def run_realtime_monitor(
     *,
     codes: list[str],
@@ -207,10 +231,7 @@ def run_realtime_monitor(
         if state_log is not None and (flushed.sent or flushed.failed):
             state_log.parent.mkdir(parents=True, exist_ok=True)
             state_log.write_text(f"outbox sent={flushed.sent} failed={flushed.failed}\n", encoding="utf-8")
-        for quote in provider.fetch(codes):
-            decision = engine.on_quote(quote)
-            if decision is not None:
-                sender.send_or_queue(decision.message(), kind="realtime_trade")
+        poll_realtime_once(codes=codes, provider=provider, sender=sender, engine=engine, state_log=state_log)
         time.sleep(poll_seconds)
 
 
