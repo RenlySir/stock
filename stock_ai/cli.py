@@ -7,6 +7,7 @@ from .backtest import BacktestConfig, run_backtest
 from .factors import load_market_csv
 from .history import default_history_end, load_or_fetch_histories
 from .notifier import ReliableWeChatSender
+from .operators import evolve_operators, save_operator_evolution
 from .optimizer import optimize_strategy
 from .realtime import DEFAULT_REALTIME_CODES, SinaQuoteProvider, run_realtime_monitor
 from .recommendation import recommend_one_stock
@@ -47,6 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
     opt.add_argument("--initial-cash", type=float, default=1_000_000)
     opt.add_argument("--output-dir", default="output/stock_ai/optimization")
 
+    evolve = sub.add_parser("evolve-operators", help="evaluate and evolve technical indicator operators")
+    evolve.add_argument("--csv", required=True)
+    evolve.add_argument("--as-of", required=True)
+    evolve.add_argument("--horizon", type=int, default=5)
+    evolve.add_argument("--top-n", type=int, default=5)
+    evolve.add_argument("--output-dir", default="output/stock_ai/operators")
+
     daily = sub.add_parser("daily-summary", help="run backtest through today and send a WeChat summary")
     daily.add_argument("--csv", required=True)
     daily.add_argument("--start-date", required=True)
@@ -73,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--history-start", default="2025-01-01")
     rec.add_argument("--history-cache-dir", default="data/cache")
     rec.add_argument("--output-dir", default="output/stock_ai/recommendation")
+    rec.add_argument("--operator-weights", default="output/stock_ai/operators/operator_weights.json")
     rec.add_argument("--cc-connect", default="/usr/local/bin/cc-connect")
     rec.add_argument("--wechat-project", default="daily-market-news")
     rec.add_argument("--wechat-session", default="weixin:dm:o9cq808Zm6pkjw0mJxDT8kaN4pKo@im.wechat")
@@ -138,6 +147,18 @@ def main() -> int:
         if result.best is not None:
             print(format_wechat_summary(result.best))
         return 0
+    if args.command == "evolve-operators":
+        bars = load_market_csv(args.csv)
+        result = evolve_operators(bars, as_of=args.as_of, horizon=args.horizon, top_n=args.top_n)
+        saved = save_operator_evolution(result, Path(args.output_dir))
+        print(f"saved operator weights to {saved['weights']}")
+        print(f"saved operator scores to {saved['scores']}")
+        for score in result.scores:
+            print(
+                f"{score.name}: weight={score.weight:.4f} ic={score.ic:.4f} "
+                f"top_return={score.top_quantile_return:.4f} hit_rate={score.hit_rate:.2f}"
+            )
+        return 0
     if args.command == "daily-summary":
         bars = load_market_csv(args.csv)
         result = run_backtest(
@@ -188,7 +209,7 @@ def main() -> int:
                 end_date=args.as_of if args.as_of else default_history_end(),
                 cache_dir=Path(args.history_cache_dir),
             )
-        rec = recommend_one_stock(fixed_bars, codes, as_of=args.as_of)
+        rec = recommend_one_stock(fixed_bars, codes, as_of=args.as_of, operator_weights_path=args.operator_weights)
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / f"recommendation_{args.as_of}.txt").write_text(rec.message, encoding="utf-8")

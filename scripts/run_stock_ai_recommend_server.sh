@@ -12,10 +12,12 @@ PY
 then
   exit 0
 fi
+AS_OF="$(date +%F)"
 python run_stock_ai.py recommend-daily \
   --csv profile_input_20260508.csv \
-  --as-of 2026-05-08 \
+  --as-of "$AS_OF" \
   --codes 600498,688820,300803 \
+  --operator-weights output/stock_ai/operators/operator_weights.json \
   --output-dir output/stock_ai/recommendation \
   --cc-connect /usr/local/bin/cc-connect \
   --wechat-project daily-market-news \
