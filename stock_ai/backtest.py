@@ -23,6 +23,10 @@ class BacktestConfig:
     fee_rate: float = 0.0003
     tax_rate: float = 0.001
     slippage_bps: float = 5
+    min_commission: float = 5.0
+    transfer_fee_rate: float = 0.00001
+    flow_fee: float = 0.1
+    trading_days_per_year: int = 250
 
 
 @dataclass
@@ -68,10 +72,11 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
             elif hold_days >= config.max_hold_days:
                 sell_reason = "max_hold_days"
             if sell_reason:
-                sell_price = close * (1 - config.slippage_bps / 10000)
+                cost = calculate_trade_cost(code, close, int(pos["shares"]), "SELL", config)
+                sell_price = cost["price"]
                 shares = int(pos["shares"])
                 proceeds = sell_price * shares
-                fee = proceeds * (config.fee_rate + config.tax_rate)
+                fee = cost["total_cost"]
                 pnl = proceeds - fee - float(pos["cost"])
                 cash += proceeds - fee
                 realized_pnl += pnl
@@ -84,9 +89,15 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
                         "code": code,
                         "name": pos["name"],
                         "shares": shares,
+                        "raw_price": round(close, 4),
                         "price": round(sell_price, 4),
                         "amount": round(proceeds, 2),
                         "fee": round(fee, 2),
+                        "commission": round(cost["commission"], 2),
+                        "stamp_tax": round(cost["stamp_tax"], 2),
+                        "transfer_fee": round(cost["transfer_fee"], 2),
+                        "flow_fee": round(cost["flow_fee"], 2),
+                        "total_cost": round(cost["total_cost"], 2),
                         "pnl": round(pnl, 2),
                         "return_pct": round(pnl / float(pos["cost"]), 6),
                         "reason": sell_reason,
@@ -110,13 +121,16 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
             code = pick["code"]
             if code in positions or code not in day_rows.index:
                 continue
-            price = float(day_rows.loc[code, "close"]) * (1 + config.slippage_bps / 10000)
+            raw_price = float(day_rows.loc[code, "close"])
+            price = apply_slippage(raw_price, "BUY", config)
             budget = min(cash, config.initial_cash * config.position_pct)
             shares = int(budget // price // 100) * 100
             if shares <= 0:
                 continue
+            cost = calculate_trade_cost(code, raw_price, shares, "BUY", config)
+            price = cost["price"]
             amount = price * shares
-            fee = amount * config.fee_rate
+            fee = cost["total_cost"]
             if amount + fee > cash:
                 continue
             cash -= amount + fee
@@ -138,9 +152,15 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
                     "code": code,
                     "name": pick.get("name", ""),
                     "shares": shares,
+                    "raw_price": round(raw_price, 4),
                     "price": round(price, 4),
                     "amount": round(amount, 2),
                     "fee": round(fee, 2),
+                    "commission": round(cost["commission"], 2),
+                    "stamp_tax": round(cost["stamp_tax"], 2),
+                    "transfer_fee": round(cost["transfer_fee"], 2),
+                    "flow_fee": round(cost["flow_fee"], 2),
+                    "total_cost": round(cost["total_cost"], 2),
                     "pnl": 0.0,
                     "return_pct": 0.0,
                     "reason": f"score={pick['combined_score']}",
@@ -175,6 +195,11 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
     candidates = pd.DataFrame(candidate_rows)
     ending_equity = float(daily.iloc[-1]["equity"]) if not daily.empty else config.initial_cash
     max_drawdown = _max_drawdown(daily["equity"]) if not daily.empty else 0.0
+    trade_days = len(daily)
+    total_return = ending_equity / config.initial_cash - 1 if config.initial_cash > 0 else 0.0
+    annual_return = _annual_return(total_return, trade_days, config.trading_days_per_year)
+    daily_return_std = float(daily["equity"].pct_change().dropna().std()) if len(daily) >= 2 else 0.0
+    sharpe = (annual_return / (daily_return_std * (config.trading_days_per_year**0.5))) if daily_return_std > 0 else 0.0
     summary = {
         "initial_cash": round(config.initial_cash, 2),
         "ending_equity": round(ending_equity, 2),
@@ -187,7 +212,10 @@ def run_backtest(raw_bars: pd.DataFrame, config: BacktestConfig) -> BacktestResu
         "buy_count": int((trades["side"] == "BUY").sum()) if not trades.empty else 0,
         "sell_count": int((trades["side"] == "SELL").sum()) if not trades.empty else 0,
         "max_drawdown_pct": round(max_drawdown, 6),
-        "return_pct": round(ending_equity / config.initial_cash - 1, 6),
+        "return_pct": round(total_return, 6),
+        "annual_return_pct": round(annual_return, 6),
+        "sharpe": round(sharpe, 6),
+        "trade_days": trade_days,
         "top_n": config.top_n,
         "min_score": config.min_score,
         "max_hold_days": config.max_hold_days,
@@ -199,3 +227,48 @@ def _max_drawdown(equity: pd.Series) -> float:
     peak = equity.cummax()
     drawdown = equity / peak - 1
     return float(drawdown.min())
+
+
+def apply_slippage(price: float, side: str, config: BacktestConfig) -> float:
+    direction = 1 if side.upper() == "BUY" else -1
+    return round(price * (1 + direction * config.slippage_bps / 10000), 4)
+
+
+def calculate_trade_cost(code: str, raw_price: float, shares: int, side: str, config: BacktestConfig) -> dict[str, float]:
+    if shares <= 0:
+        return {
+            "price": raw_price,
+            "commission": 0.0,
+            "stamp_tax": 0.0,
+            "transfer_fee": 0.0,
+            "flow_fee": 0.0,
+            "total_cost": 0.0,
+        }
+    price = apply_slippage(raw_price, side, config)
+    amount = price * shares
+    commission = max(amount * config.fee_rate, config.min_commission)
+    stamp_tax = amount * config.tax_rate if side.upper() == "SELL" else 0.0
+    transfer_fee = amount * config.transfer_fee_rate if _is_shanghai_code(code) else 0.0
+    flow_fee = config.flow_fee
+    return {
+        "price": price,
+        "commission": commission,
+        "stamp_tax": stamp_tax,
+        "transfer_fee": transfer_fee,
+        "flow_fee": flow_fee,
+        "total_cost": commission + stamp_tax + transfer_fee + flow_fee,
+    }
+
+
+def _is_shanghai_code(code: str) -> bool:
+    text = str(code).upper()
+    return text.startswith("6") or text.startswith("SH.")
+
+
+def _annual_return(total_return: float, trade_days: int, trading_days_per_year: int) -> float:
+    if trade_days <= 0:
+        return 0.0
+    base = 1 + total_return
+    if base <= 0:
+        return -1.0
+    return base ** (trading_days_per_year / trade_days) - 1

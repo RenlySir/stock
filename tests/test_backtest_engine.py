@@ -84,7 +84,7 @@ class BacktestEngineTest(unittest.TestCase):
         self.assertEqual(result.summary["initial_cash"], 1_000_000)
         self.assertGreater(result.summary["gross_profit"], 0)
         self.assertEqual(result.summary["realized_pnl"], result.summary["gross_profit"] - result.summary["gross_loss"])
-        self.assertEqual(result.summary["total_pnl"], result.summary["ending_equity"] - result.summary["initial_cash"])
+        self.assertAlmostEqual(result.summary["total_pnl"], result.summary["ending_equity"] - result.summary["initial_cash"], places=2)
         self.assertGreater(result.summary["ending_equity"], result.summary["initial_cash"])
 
     def test_optimizer_returns_best_parameter_set(self) -> None:
@@ -127,6 +127,37 @@ class BacktestEngineTest(unittest.TestCase):
         self.assertIn("买入价：", message)
         self.assertIn("卖出价：", message)
         self.assertIn("强势股", message)
+
+    def test_backtest_records_oskhquant_style_costs_and_annual_metrics(self) -> None:
+        result = run_backtest(
+            sample_bars().assign(code=lambda df: df["code"].replace({"000001": "600001"})),
+            BacktestConfig(
+                start_date="2026-02-02",
+                end_date="2026-04-15",
+                initial_cash=1_000_000,
+                top_n=1,
+                min_score=30,
+                max_hold_days=20,
+                fee_rate=0.0003,
+                tax_rate=0.001,
+                min_commission=5.0,
+                transfer_fee_rate=0.00001,
+                flow_fee=0.1,
+                slippage_bps=10,
+            ),
+        )
+
+        self.assertFalse(result.trades.empty)
+        for column in ["commission", "stamp_tax", "transfer_fee", "flow_fee", "total_cost"]:
+            self.assertIn(column, result.trades.columns)
+        sells = result.trades[result.trades["side"] == "SELL"]
+        buys = result.trades[result.trades["side"] == "BUY"]
+        self.assertGreater(float(sells["stamp_tax"].sum()), 0)
+        self.assertGreater(float(buys["transfer_fee"].sum()), 0)
+        self.assertGreaterEqual(float(result.trades["commission"].min()), 5.0)
+        self.assertIn("annual_return_pct", result.summary)
+        self.assertIn("trade_days", result.summary)
+        self.assertGreater(result.summary["trade_days"], 0)
 
 
 if __name__ == "__main__":
