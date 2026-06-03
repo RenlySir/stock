@@ -3,6 +3,15 @@ set -euo pipefail
 
 cd /opt/stock
 . .venv/bin/activate
+if ! python - <<'PY'
+from stock_ai.market_calendar import is_a_share_trading_day
+if not is_a_share_trading_day():
+    print("skip: non A-share trading day")
+    raise SystemExit(1)
+PY
+then
+  exit 0
+fi
 python run_stock_ai.py recommend-daily \
   --csv profile_input_20260508.csv \
   --as-of 2026-05-08 \

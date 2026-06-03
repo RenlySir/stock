@@ -4,12 +4,13 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, time as dtime
+from datetime import datetime
 from pathlib import Path
 
 import requests
 
 from .notifier import ReliableWeChatSender
+from .market_calendar import is_a_share_trading_time
 
 
 DEFAULT_REALTIME_CODES = ["600498", "688820", "300803"]
@@ -53,11 +54,7 @@ class TradeDecision:
 
 
 def is_a_share_market_time(now: datetime | None = None) -> bool:
-    now = now or datetime.now()
-    if now.weekday() >= 5:
-        return False
-    current = now.time()
-    return dtime(9, 30) <= current <= dtime(11, 30) or dtime(13, 0) <= current <= dtime(15, 0)
+    return is_a_share_trading_time(now)
 
 
 def market_symbol(code: str) -> str:
