@@ -108,7 +108,7 @@ macOS/Linux cron 示例：
 - `open_positions.csv`：当前未平仓持仓。
 - `candidates.csv`：每日候选股。
 - `profit_summary.csv`：可读的盈亏摘要。
-- `operator_weights.json`：自我演进选出的算子权重，用于每日 8:50 固定三只股票推荐。
+- `operator_weights.json`：自我演进选出的算子权重，用于每日 15:35 盘后固定三只股票推荐。
 - `operator_scores.csv`：每个候选算子的 IC、前分位未来收益、命中率和样本数。
 - `market_outlook_YYYY-MM-DD.txt`：每日 15:10 发送的明日大盘预测观点。
 - `data/stock_ai.sqlite`：SQLite 数据库，存储日线、推荐记录、算子权重和评分。
