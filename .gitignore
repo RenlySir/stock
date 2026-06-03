@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local market data, generated reports, logs, and private message artifacts.
+data/
+output/
+*.xlsx
+*.csv
+*_message.txt
+*_send_error*.log
+cc_connect_weixin_qr.png
