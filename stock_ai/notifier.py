@@ -135,5 +135,15 @@ class ReliableWeChatSender:
 
     def _restart_if_needed(self, error: str) -> None:
         lower = error.lower()
-        if any(token in lower for token in ("api.sock", "connection refused", "failed to connect", "another cc-connect instance")):
+        if any(
+            token in lower
+            for token in (
+                "api.sock",
+                "connection refused",
+                "failed to connect",
+                "another cc-connect instance",
+                "ret=-2",
+                "sendmessage declined",
+            )
+        ):
             subprocess.run([str(self.cc_connect), "daemon", "restart"], check=False, capture_output=True, text=True)
