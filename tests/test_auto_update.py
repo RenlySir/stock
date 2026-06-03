@@ -55,6 +55,10 @@ class AutoUpdateTest(unittest.TestCase):
             self.assertIsNotNone(result.best)
             self.assertEqual(saved["as_of"], "2026-04-30")
             self.assertIn("score", saved)
+            self.assertEqual(saved["validation"], "walk_forward")
+            self.assertIn("out_of_sample_score", saved)
+            self.assertGreaterEqual(saved["fold_count"], 1)
+            self.assertGreater(saved["trade_count"], 0)
             self.assertTrue((Path(tmp) / "strategy_config.json").exists())
 
 
