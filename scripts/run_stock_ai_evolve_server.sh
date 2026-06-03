@@ -18,4 +18,5 @@ python run_stock_ai.py evolve-operators \
   --as-of "$AS_OF" \
   --horizon 5 \
   --top-n 5 \
+  --codes 600498,688820,300803 \
   --output-dir output/stock_ai/operators

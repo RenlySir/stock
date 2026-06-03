@@ -79,6 +79,20 @@ class OperatorEvolutionTest(unittest.TestCase):
             self.assertIn("op_momentum_20", payload["weights"])
             self.assertTrue(saved["scores"].exists())
 
+    def test_evolve_operators_can_limit_to_fixed_codes(self) -> None:
+        bars = pd.concat(
+            [
+                operator_sample_bars(),
+                operator_sample_bars().assign(code="000001", name="额外股票"),
+            ],
+            ignore_index=True,
+        )
+
+        result = evolve_operators(bars, as_of="2026-04-30", horizon=5, top_n=5, codes=["600498", "688820", "300803"])
+
+        self.assertGreaterEqual(len(result.scores), 1)
+        self.assertEqual(result.codes, ["600498", "688820", "300803"])
+
     def test_recommendation_uses_evolved_operator_weights_when_available(self) -> None:
         bars = operator_sample_bars()
         result = evolve_operators(bars, as_of="2026-04-30", horizon=5, top_n=5)

@@ -38,6 +38,7 @@ class OperatorEvolutionResult:
     horizon: int
     scores: list[OperatorScore]
     weights: dict[str, float]
+    codes: list[str]
 
 
 def add_operator_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -97,10 +98,21 @@ def add_operator_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def evolve_operators(df: pd.DataFrame, *, as_of: str, horizon: int = 5, top_n: int = 5) -> OperatorEvolutionResult:
+def evolve_operators(
+    df: pd.DataFrame,
+    *,
+    as_of: str,
+    horizon: int = 5,
+    top_n: int = 5,
+    codes: list[str] | None = None,
+) -> OperatorEvolutionResult:
     if horizon <= 0:
         raise ValueError("horizon must be positive")
-    frame = add_operator_columns(df)
+    selected_codes = [str(code).zfill(6) for code in codes] if codes else []
+    source = df.copy()
+    if selected_codes:
+        source = source[source["code"].astype(str).str.zfill(6).isin(selected_codes)]
+    frame = add_operator_columns(source)
     as_of_date = pd.to_datetime(as_of).strftime("%Y-%m-%d")
     groups = frame.groupby("code", group_keys=False)
     frame["future_return"] = groups["close"].shift(-horizon) / frame["close"] - 1
@@ -156,7 +168,8 @@ def evolve_operators(df: pd.DataFrame, *, as_of: str, horizon: int = 5, top_n: i
         )
         for score in ranked
     ]
-    return OperatorEvolutionResult(as_of=as_of_date, horizon=horizon, scores=ranked_with_weights, weights=weights)
+    result_codes = selected_codes or sorted(frame["code"].astype(str).str.zfill(6).unique().tolist())
+    return OperatorEvolutionResult(as_of=as_of_date, horizon=horizon, scores=ranked_with_weights, weights=weights, codes=result_codes)
 
 
 def save_operator_evolution(result: OperatorEvolutionResult, output_dir: Path) -> dict[str, Path]:
@@ -168,6 +181,7 @@ def save_operator_evolution(result: OperatorEvolutionResult, output_dir: Path) -
             {
                 "as_of": result.as_of,
                 "horizon": result.horizon,
+                "codes": result.codes,
                 "weights": result.weights,
             },
             ensure_ascii=False,

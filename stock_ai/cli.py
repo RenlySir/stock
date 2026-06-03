@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     evolve.add_argument("--as-of", required=True)
     evolve.add_argument("--horizon", type=int, default=5)
     evolve.add_argument("--top-n", type=int, default=5)
+    evolve.add_argument("--codes", default="")
     evolve.add_argument("--output-dir", default="output/stock_ai/operators")
 
     daily = sub.add_parser("daily-summary", help="run backtest through today and send a WeChat summary")
@@ -75,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument("--wechat-outbox", default="output/stock_ai/wechat_outbox")
     realtime.add_argument("--state-log", default="output/stock_ai/realtime_monitor.log")
 
-    rec = sub.add_parser("recommend-daily", help="recommend one stock at 08:50 and send it to WeChat")
+    rec = sub.add_parser("recommend-daily", help="recommend one stock from the fixed stock pool and send it to WeChat")
     rec.add_argument("--csv", required=True)
     rec.add_argument("--as-of", required=True)
     rec.add_argument("--codes", default=",".join(DEFAULT_REALTIME_CODES))
@@ -158,10 +159,12 @@ def main() -> int:
         return 0
     if args.command == "evolve-operators":
         bars = load_market_csv(args.csv)
-        result = evolve_operators(bars, as_of=args.as_of, horizon=args.horizon, top_n=args.top_n)
+        codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
+        result = evolve_operators(bars, as_of=args.as_of, horizon=args.horizon, top_n=args.top_n, codes=codes or None)
         saved = save_operator_evolution(result, Path(args.output_dir))
         print(f"saved operator weights to {saved['weights']}")
         print(f"saved operator scores to {saved['scores']}")
+        print(f"operator universe: {','.join(result.codes)}")
         for score in result.scores:
             print(
                 f"{score.name}: weight={score.weight:.4f} ic={score.ic:.4f} "

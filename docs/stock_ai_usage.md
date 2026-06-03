@@ -51,6 +51,7 @@ python3 run_stock_ai.py evolve-operators \
   --as-of 2026-05-08 \
   --horizon 5 \
   --top-n 5 \
+  --codes 600498,688820,300803 \
   --output-dir output/stock_ai/operators
 ```
 
