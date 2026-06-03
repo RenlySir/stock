@@ -14,6 +14,7 @@ then
 fi
 python run_stock_ai.py market-outlook \
   --as-of "$(date +%F)" \
+  --db-path data/stock_ai.sqlite \
   --output-dir output/stock_ai/market_outlook \
   --cc-connect /usr/local/bin/cc-connect \
   --wechat-project daily-market-news \

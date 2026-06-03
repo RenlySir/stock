@@ -9,6 +9,7 @@ import pandas as pd
 import requests
 
 from .notifier import ReliableWeChatSender
+from .sentiment import SentimentResult, analyze_market_sentiment
 
 
 INDEX_SYMBOLS = {
@@ -29,20 +30,27 @@ class MarketDataSnapshot:
     news_titles: list[str]
     northbound_text: str = ""
     data_notes: list[str] | None = None
+    sentiment: SentimentResult | None = None
 
 
-def collect_market_snapshot(as_of: str | None = None) -> MarketDataSnapshot:
+def collect_market_snapshot(as_of: str | None = None, *, db_path: Path | str | None = None) -> MarketDataSnapshot:
     report_date = as_of or date.today().strftime("%Y-%m-%d")
     notes: list[str] = []
     index_rows = _fetch_index_rows(notes)
     news_titles = _fetch_market_news(notes)
     northbound_text = _fetch_northbound_text(notes)
+    sentiment = analyze_market_sentiment(news_titles, as_of=report_date)
+    if db_path is not None:
+        from .storage import StockDatabase
+
+        StockDatabase(Path(db_path)).save_market_sentiment(sentiment)
     return MarketDataSnapshot(
         as_of=report_date,
         index_rows=index_rows,
         news_titles=news_titles,
         northbound_text=northbound_text,
         data_notes=notes,
+        sentiment=sentiment,
     )
 
 
@@ -71,6 +79,7 @@ def build_market_outlook_message(snapshot: MarketDataSnapshot) -> str:
     news_lines = [f"- {title}" for title in snapshot.news_titles[:6]] or ["- 新闻舆情数据获取失败，本次仅参考行情数据。"]
     driver_lines = [f"- {driver}" for driver in drivers] or ["- 未识别到强方向驱动。"]
     note_lines = [f"- {note}" for note in (snapshot.data_notes or [])]
+    sentiment_lines = _format_sentiment_lines(snapshot.sentiment)
 
     parts = [
         f"【明日大盘预测观点】{snapshot.as_of}",
@@ -83,6 +92,9 @@ def build_market_outlook_message(snapshot: MarketDataSnapshot) -> str:
         "",
         "市场舆论与事件线索：",
         "\n".join(news_lines),
+        "",
+        "A股情感分析：",
+        "\n".join(sentiment_lines),
         "",
         "形成观点的关键依据：",
         "\n".join(driver_lines),
@@ -213,17 +225,22 @@ def _score_snapshot(snapshot: MarketDataSnapshot) -> tuple[float, list[str]]:
         elif positive_count <= 1:
             score -= 0.7
             drivers.append("多数核心指数收跌，短线承压信号偏强。")
-    news_text = "\n".join(snapshot.news_titles)
-    pos = sum(news_text.count(word) for word in POSITIVE_WORDS)
-    neg = sum(news_text.count(word) for word in NEGATIVE_WORDS)
-    sentiment = min(pos - neg, 4) if pos >= neg else max(pos - neg, -4)
-    score += sentiment * 0.25
-    if sentiment > 0:
-        drivers.append(f"新闻关键词偏积极，正向词 {pos} 个、负向词 {neg} 个。")
-    elif sentiment < 0:
-        drivers.append(f"新闻关键词偏谨慎，正向词 {pos} 个、负向词 {neg} 个。")
+    if snapshot.sentiment is not None:
+        sentiment_score = max(min(snapshot.sentiment.bullish_index, 1.0), -1.0)
+        score += sentiment_score
+        drivers.append(snapshot.sentiment.summary)
     else:
-        drivers.append("新闻关键词多空接近，舆情未给出强方向。")
+        news_text = "\n".join(snapshot.news_titles)
+        pos = sum(news_text.count(word) for word in POSITIVE_WORDS)
+        neg = sum(news_text.count(word) for word in NEGATIVE_WORDS)
+        sentiment = min(pos - neg, 4) if pos >= neg else max(pos - neg, -4)
+        score += sentiment * 0.25
+        if sentiment > 0:
+            drivers.append(f"新闻关键词偏积极，正向词 {pos} 个、负向词 {neg} 个。")
+        elif sentiment < 0:
+            drivers.append(f"新闻关键词偏谨慎，正向词 {pos} 个、负向词 {neg} 个。")
+        else:
+            drivers.append("新闻关键词多空接近，舆情未给出强方向。")
     if "流入" in snapshot.northbound_text or "净流入" in snapshot.northbound_text:
         score += 0.4
         drivers.append("资金线索出现流入表述，对风险偏好有支撑。")
@@ -234,6 +251,17 @@ def _score_snapshot(snapshot: MarketDataSnapshot) -> tuple[float, list[str]]:
         score -= min(len(snapshot.data_notes) * 0.2, 0.8)
         drivers.append("部分数据源获取失败，观点置信度下调。")
     return round(score, 2), drivers
+
+
+def _format_sentiment_lines(sentiment: SentimentResult | None) -> list[str]:
+    if sentiment is None:
+        return ["- 情感分析不可用。"]
+    lines = [
+        f"- {sentiment.summary}",
+        f"- 正向高频词：{'、'.join(sentiment.top_positive_terms) if sentiment.top_positive_terms else '无'}",
+        f"- 负向高频词：{'、'.join(sentiment.top_negative_terms) if sentiment.top_negative_terms else '无'}",
+    ]
+    return lines
 
 
 def _first_existing(row: pd.Series, columns: list[str]) -> float:

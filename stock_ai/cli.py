@@ -101,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     outlook = sub.add_parser("market-outlook", help="send next-day A-share market outlook to WeChat")
     outlook.add_argument("--as-of", default="")
+    outlook.add_argument("--db-path", default="data/stock_ai.sqlite")
     outlook.add_argument("--output-dir", default="output/stock_ai/market_outlook")
     outlook.add_argument("--cc-connect", default="/usr/local/bin/cc-connect")
     outlook.add_argument("--wechat-project", default="daily-market-news")
@@ -268,7 +269,7 @@ def main() -> int:
         print(f"wechat recommendation {'sent' if ok else 'queued'}")
         return 0
     if args.command == "market-outlook":
-        snapshot = collect_market_snapshot(args.as_of or None)
+        snapshot = collect_market_snapshot(args.as_of or None, db_path=args.db_path)
         sender = ReliableWeChatSender(
             cc_connect=Path(args.cc_connect),
             project=args.wechat_project,

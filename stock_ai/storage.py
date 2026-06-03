@@ -10,6 +10,7 @@ import pandas as pd
 
 from .operators import OperatorEvolutionResult
 from .recommendation import StockRecommendation
+from .sentiment import SentimentResult
 
 
 class StockDatabase:
@@ -161,6 +162,54 @@ class StockDatabase:
             ).fetchall()
         return {str(row["operator"]): float(row["weight"]) for row in rows}
 
+    def save_market_sentiment(self, result: SentimentResult) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO market_sentiment(
+                    as_of, positive_count, negative_count, neutral_count,
+                    bullish_index, simple_index, top_positive_terms_json,
+                    top_negative_terms_json, summary, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ON CONFLICT(as_of) DO UPDATE SET
+                    positive_count=excluded.positive_count,
+                    negative_count=excluded.negative_count,
+                    neutral_count=excluded.neutral_count,
+                    bullish_index=excluded.bullish_index,
+                    simple_index=excluded.simple_index,
+                    top_positive_terms_json=excluded.top_positive_terms_json,
+                    top_negative_terms_json=excluded.top_negative_terms_json,
+                    summary=excluded.summary,
+                    created_at=excluded.created_at
+                """,
+                (
+                    result.as_of,
+                    result.positive_count,
+                    result.negative_count,
+                    result.neutral_count,
+                    result.bullish_index,
+                    result.simple_index,
+                    json.dumps(result.top_positive_terms, ensure_ascii=False),
+                    json.dumps(result.top_negative_terms, ensure_ascii=False),
+                    result.summary,
+                ),
+            )
+
+    def load_latest_market_sentiment(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT as_of, positive_count, negative_count, neutral_count,
+                       bullish_index, simple_index, top_positive_terms_json,
+                       top_negative_terms_json, summary, created_at
+                FROM market_sentiment
+                ORDER BY as_of DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(
@@ -212,6 +261,19 @@ class StockDatabase:
                     sample_size INTEGER NOT NULL,
                     weight REAL NOT NULL,
                     PRIMARY KEY(as_of, operator)
+                );
+
+                CREATE TABLE IF NOT EXISTS market_sentiment (
+                    as_of TEXT PRIMARY KEY,
+                    positive_count INTEGER NOT NULL,
+                    negative_count INTEGER NOT NULL,
+                    neutral_count INTEGER NOT NULL,
+                    bullish_index REAL NOT NULL,
+                    simple_index REAL NOT NULL,
+                    top_positive_terms_json TEXT NOT NULL,
+                    top_negative_terms_json TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 );
                 """
             )

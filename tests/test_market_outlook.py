@@ -9,6 +9,7 @@ import pandas as pd
 
 from stock_ai.market_outlook import MarketDataSnapshot, build_market_outlook_message, send_market_outlook
 from stock_ai.notifier import ReliableWeChatSender
+from stock_ai.sentiment import analyze_market_sentiment
 
 
 class MarketOutlookTest(unittest.TestCase):
@@ -22,6 +23,7 @@ class MarketOutlookTest(unittest.TestCase):
             ],
             news_titles=["央行开展逆回购操作维护流动性", "AI芯片板块成交活跃", "外围市场风险偏好改善"],
             northbound_text="北向资金净流入 35 亿元",
+            sentiment=analyze_market_sentiment(["AI芯片板块成交活跃", "外围市场风险偏好改善"], as_of="2026-06-03"),
         )
 
         message = build_market_outlook_message(snapshot)
@@ -30,6 +32,8 @@ class MarketOutlookTest(unittest.TestCase):
         self.assertIn("观点：", message)
         self.assertIn("上证指数", message)
         self.assertIn("央行开展逆回购", message)
+        self.assertIn("A股情感分析", message)
+        self.assertIn("BI=", message)
         self.assertIn("不构成投资建议", message)
 
     def test_send_market_outlook_saves_and_sends_message(self) -> None:
