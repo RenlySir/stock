@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from .operators import load_operator_weights, score_latest_with_weights
+from .rl_policy import evaluate_rl_actions
 from .strategy import StrategyConfig, score_candidates, select_candidates
 
 
@@ -82,6 +83,7 @@ def recommend_one_stock(
     detail_rows = universe[universe["code"].astype(str).str.zfill(6) == code].copy()
     metadata = enrich_stock_metadata(code, row, detail_rows)
     volume_summary = build_volume_summary(detail_rows, as_of=as_of)
+    rl_note = build_rl_note(universe, codes, code, as_of=as_of)
     reason_lines = build_recommendation_reasons(row, volume_summary, reasons)
     name = metadata["name"]
     message = (
@@ -96,6 +98,7 @@ def recommend_one_stock(
         f"近5日交易量：{volume_summary['volume_text']}\n"
         f"近5日成交额：{volume_summary['amount_text']}\n"
         f"近5日涨跌幅：{volume_summary['return_text']}\n"
+        f"{rl_note}"
         f"推荐理由：{reason_lines}\n"
         f"主要风险：{risks}"
     )
@@ -160,6 +163,15 @@ def build_recommendation_reasons(row: pd.Series, volume_summary: dict[str, Any],
     elif volume_ratio > 0:
         reasons.append(f"近5日日均量为前5日 {volume_ratio:.2f} 倍，量能相对平稳")
     return "、".join(dict.fromkeys(reasons)) or "固定股票池中综合评分最高"
+
+
+def build_rl_note(bars: pd.DataFrame, codes: list[str], selected_code: str, *, as_of: str) -> str:
+    actions = evaluate_rl_actions(bars, codes, as_of=as_of)
+    if actions.empty:
+        return ""
+    selected = actions[actions["code"].astype(str).str.zfill(6) == selected_code]
+    row = selected.iloc[0] if not selected.empty else actions.iloc[0]
+    return f"强化学习启发动作：{float(row['action']):+.2f}，{row['reason']}\n"
 
 
 def _fetch_stock_metadata(code: str) -> dict[str, str]:

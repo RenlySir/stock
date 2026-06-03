@@ -78,6 +78,7 @@ class RecommendationTest(unittest.TestCase):
         self.assertIn("概念题材：算力、5G、光通信", rec.message)
         self.assertIn("近5日交易量", rec.message)
         self.assertIn("近5日成交额", rec.message)
+        self.assertIn("强化学习启发动作", rec.message)
 
     def test_recommendation_uses_fixed_metadata_fallback(self) -> None:
         dates = pd.bdate_range("2026-01-01", periods=70)
