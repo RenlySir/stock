@@ -6,6 +6,7 @@ from pathlib import Path
 from .backtest import BacktestConfig, run_backtest
 from .factors import load_market_csv
 from .history import default_history_end, load_or_fetch_histories
+from .market_outlook import collect_market_snapshot, send_market_outlook
 from .notifier import ReliableWeChatSender
 from .operators import evolve_operators, save_operator_evolution
 from .optimizer import optimize_strategy
@@ -86,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--wechat-project", default="daily-market-news")
     rec.add_argument("--wechat-session", default="weixin:dm:o9cq808Zm6pkjw0mJxDT8kaN4pKo@im.wechat")
     rec.add_argument("--wechat-outbox", default="output/stock_ai/wechat_outbox")
+
+    outlook = sub.add_parser("market-outlook", help="send next-day A-share market outlook to WeChat")
+    outlook.add_argument("--as-of", default="")
+    outlook.add_argument("--output-dir", default="output/stock_ai/market_outlook")
+    outlook.add_argument("--cc-connect", default="/usr/local/bin/cc-connect")
+    outlook.add_argument("--wechat-project", default="daily-market-news")
+    outlook.add_argument("--wechat-session", default="weixin:dm:o9cq808Zm6pkjw0mJxDT8kaN4pKo@im.wechat")
+    outlook.add_argument("--wechat-outbox", default="output/stock_ai/wechat_outbox")
 
     flush = sub.add_parser("flush-wechat-outbox", help="retry queued WeChat messages")
     flush.add_argument("--cc-connect", default="/usr/local/bin/cc-connect")
@@ -224,6 +233,17 @@ def main() -> int:
         print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
         ok = sender.send_or_queue(rec.message, kind="recommendation")
         print(f"wechat recommendation {'sent' if ok else 'queued'}")
+        return 0
+    if args.command == "market-outlook":
+        snapshot = collect_market_snapshot(args.as_of or None)
+        sender = ReliableWeChatSender(
+            cc_connect=Path(args.cc_connect),
+            project=args.wechat_project,
+            session=args.wechat_session,
+            outbox_dir=Path(args.wechat_outbox),
+        )
+        ok = send_market_outlook(snapshot, sender=sender, output_dir=Path(args.output_dir))
+        print(f"wechat market outlook {'sent' if ok else 'queued'}")
         return 0
     if args.command == "flush-wechat-outbox":
         sender = ReliableWeChatSender(

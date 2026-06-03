@@ -10,6 +10,7 @@
 - 自我算子演进：生成 MACD、RSI、KDJ、BOLL、动量、量价、突破、低波动等公开技术指标算子，按历史未来收益评估 IC、命中率和前分位收益，并把权重用于次日推荐。
 - 回测报表：记录所有买入、卖出、已实现盈亏、浮盈浮亏、总盈利、总亏损和最大回撤。
 - 微信通知：通过本机 `cc-connect` 向配置的微信会话发送买卖和日报摘要。
+- 明日大盘预测：盘后综合主要指数、资金线索和市场新闻关键词，生成次日大盘观点并微信发送。
 - 每日 15:00：可用 `cron` 或 `launchd` 调用 `scripts/run_stock_ai_daily.sh`。
 
 ## 运行示例
@@ -62,6 +63,12 @@ python3 run_stock_ai.py daily-summary \
   --end-date 2026-05-08
 ```
 
+发送明日大盘预测观点：
+
+```bash
+python3 run_stock_ai.py market-outlook --as-of 2026-06-03
+```
+
 ## 每天下午 3 点发送
 
 macOS/Linux cron 示例：
@@ -80,6 +87,7 @@ macOS/Linux cron 示例：
 - `profit_summary.csv`：可读的盈亏摘要。
 - `operator_weights.json`：自我演进选出的算子权重，用于每日 8:50 固定三只股票推荐。
 - `operator_scores.csv`：每个候选算子的 IC、前分位未来收益、命中率和样本数。
+- `market_outlook_YYYY-MM-DD.txt`：每日 15:10 发送的明日大盘预测观点。
 
 ## 注意
 
