@@ -142,8 +142,6 @@ class ReliableWeChatSender:
                 "connection refused",
                 "failed to connect",
                 "another cc-connect instance",
-                "ret=-2",
-                "sendmessage declined",
             )
         ):
             subprocess.run([str(self.cc_connect), "daemon", "restart"], check=False, capture_output=True, text=True)

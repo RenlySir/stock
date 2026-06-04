@@ -12,7 +12,7 @@ from .market_outlook import collect_market_snapshot, send_market_outlook
 from .notifier import ReliableWeChatSender
 from .operators import evolve_operators, save_operator_evolution
 from .optimizer import optimize_strategy
-from .realtime import DEFAULT_REALTIME_CODES, SinaQuoteProvider, run_realtime_monitor
+from .realtime import DEFAULT_REALTIME_CODES, CombinedQuoteProvider, EastMoneyQuoteProvider, SinaQuoteProvider, run_realtime_monitor
 from .recommendation import recommend_one_stock
 from .reports import format_trade_alerts, format_wechat_summary, save_backtest_outputs, save_optimization_outputs
 from .storage import StockDatabase
@@ -259,7 +259,7 @@ def main() -> int:
         codes = [code.strip().zfill(6) for code in args.codes.split(",") if code.strip()]
         run_realtime_monitor(
             codes=codes,
-            provider=SinaQuoteProvider(),
+            provider=CombinedQuoteProvider([SinaQuoteProvider(), EastMoneyQuoteProvider()]),
             sender=sender,
             poll_seconds=args.poll_seconds,
             state_log=Path(args.state_log),

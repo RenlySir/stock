@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from stock_ai.notifier import ReliableWeChatSender
+from stock_ai.notifier import ReliableWeChatSender, WeChatSendError
 
 
 class ReliableWeChatSenderTest(unittest.TestCase):
@@ -57,6 +57,37 @@ class ReliableWeChatSenderTest(unittest.TestCase):
 
             self.assertFalse(sent)
             self.assertEqual(len(list((Path(tmp) / "outbox").glob("*.json"))), 1)
+
+    def test_ret_minus_two_does_not_restart_cc_connect_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sender = ReliableWeChatSender(
+                cc_connect=Path("/usr/local/bin/cc-connect"),
+                project="daily-market-news",
+                session="weixin:dm:test@im.wechat",
+                outbox_dir=Path(tmp) / "outbox",
+                retries=2,
+                retry_sleep_sec=0,
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command: list[str], **kwargs: object) -> object:
+                commands.append(command)
+
+                class Result:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+
+                if command[1] == "send":
+                    Result.returncode = 1
+                    Result.stderr = "weixin: sendMessage: ret=-2 errcode=0 errmsg="
+                return Result()
+
+            with patch("stock_ai.notifier.subprocess.run", side_effect=fake_run):
+                with self.assertRaises(WeChatSendError):
+                    sender.send("微信暂时拒绝的消息")
+
+            self.assertNotIn(["/usr/local/bin/cc-connect", "daemon", "restart"], commands)
 
 
 if __name__ == "__main__":

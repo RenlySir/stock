@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from stock_ai.realtime import Quote, RealtimeDecisionEngine, is_a_share_market_time, poll_realtime_once
+from stock_ai.realtime import CombinedQuoteProvider, EastMoneyQuoteProvider, Quote, RealtimeDecisionEngine, is_a_share_market_time, poll_realtime_once
 from stock_ai.recommendation import recommend_one_stock
 
 
@@ -64,6 +65,116 @@ class RealtimeTradingTest(unittest.TestCase):
 
             self.assertIn("quote fetch error", state_log.read_text(encoding="utf-8"))
             self.assertIn("network down", state_log.read_text(encoding="utf-8"))
+
+    def test_combined_quote_provider_falls_back_when_primary_fails(self) -> None:
+        class FailingProvider:
+            name = "sina"
+
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                raise RuntimeError("sina down")
+
+        class WorkingProvider:
+            name = "eastmoney"
+
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                return [
+                    Quote(
+                        code="600498",
+                        name="烽火通信",
+                        price=52.97,
+                        open=51.1,
+                        previous_close=52.02,
+                        high=53.99,
+                        low=50.98,
+                        volume=68132920,
+                        amount=3608661942,
+                        timestamp="2026-06-04 11:30:00",
+                    )
+                ]
+
+        with TemporaryDirectory() as tmp:
+            provider = CombinedQuoteProvider([FailingProvider(), WorkingProvider()])
+            quotes = provider.fetch(["600498"], state_log=Path(tmp) / "provider.log")
+
+            self.assertEqual(len(quotes), 1)
+            self.assertEqual(quotes[0].code, "600498")
+            log_text = (Path(tmp) / "provider.log").read_text(encoding="utf-8")
+            self.assertIn("quote provider failed provider=sina", log_text)
+            self.assertIn("quote provider ok provider=eastmoney count=1", log_text)
+
+    def test_poll_realtime_once_logs_missing_codes_when_provider_returns_partial_data(self) -> None:
+        class PartialProvider:
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                return [
+                    Quote(
+                        code="600498",
+                        name="烽火通信",
+                        price=52.97,
+                        open=51.1,
+                        previous_close=52.02,
+                        high=53.99,
+                        low=50.98,
+                        volume=68132920,
+                        amount=3608661942,
+                        timestamp="2026-06-04 11:30:00",
+                    )
+                ]
+
+        class RecordingSender:
+            def send_or_queue(self, message: str, *, kind: str) -> bool:
+                return True
+
+        with TemporaryDirectory() as tmp:
+            state_log = Path(tmp) / "realtime.log"
+            poll_realtime_once(
+                codes=["600498", "688820", "300803"],
+                provider=PartialProvider(),
+                sender=RecordingSender(),
+                engine=RealtimeDecisionEngine(),
+                state_log=state_log,
+            )
+
+            log_text = state_log.read_text(encoding="utf-8")
+            self.assertIn("quote fetch partial count=1 expected=3 missing=688820,300803", log_text)
+
+    def test_eastmoney_provider_parses_ulist_response(self) -> None:
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "rc": 0,
+                    "data": {
+                        "diff": [
+                            {
+                                "f2": 52.97,
+                                "f5": 681329,
+                                "f6": 3608661942.0,
+                                "f12": "600498",
+                                "f13": 1,
+                                "f14": "烽火通信",
+                                "f15": 53.99,
+                                "f16": 50.98,
+                                "f17": 51.1,
+                                "f18": 52.02,
+                                "f124": 1780547511,
+                            }
+                        ]
+                    },
+                }
+
+        def fake_get(*args: object, **kwargs: object) -> FakeResponse:
+            return FakeResponse()
+
+        with unittest.mock.patch("stock_ai.realtime.requests.get", side_effect=fake_get):
+            quotes = EastMoneyQuoteProvider().fetch(["600498"])
+
+        self.assertEqual(len(quotes), 1)
+        self.assertEqual(quotes[0].code, "600498")
+        self.assertEqual(quotes[0].name, "烽火通信")
+        self.assertEqual(quotes[0].price, 52.97)
+        self.assertEqual(quotes[0].volume, 68132900)
 
 
 class RecommendationTest(unittest.TestCase):

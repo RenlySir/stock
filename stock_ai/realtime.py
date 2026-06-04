@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 import requests
 
@@ -28,6 +29,13 @@ class Quote:
     volume: float
     amount: float
     timestamp: str
+
+
+class QuoteProvider(Protocol):
+    name: str
+
+    def fetch(self, codes: list[str]) -> list[Quote]:
+        ...
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,8 @@ def market_symbol(code: str) -> str:
 
 
 class SinaQuoteProvider:
+    name = "sina"
+
     def __init__(self, timeout: float = 5.0) -> None:
         self.timeout = timeout
 
@@ -100,6 +110,81 @@ class SinaQuoteProvider:
                 )
             )
         return quotes
+
+
+class EastMoneyQuoteProvider:
+    name = "eastmoney"
+
+    def __init__(self, timeout: float = 5.0) -> None:
+        self.timeout = timeout
+
+    def fetch(self, codes: list[str]) -> list[Quote]:
+        response = requests.get(
+            "https://push2.eastmoney.com/api/qt/ulist.np/get",
+            params={
+                "fltt": "2",
+                "invt": "2",
+                "fields": "f12,f14,f2,f5,f6,f17,f18,f15,f16,f13,f124",
+                "secids": ",".join(_eastmoney_symbol(code) for code in codes),
+            },
+            headers={"Referer": "https://quote.eastmoney.com/", "User-Agent": "Mozilla/5.0"},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if int(payload.get("rc", -1)) != 0:
+            raise RuntimeError(f"eastmoney rc={payload.get('rc')}")
+        rows = payload.get("data", {}).get("diff", []) if isinstance(payload.get("data"), dict) else []
+        quotes = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            price = _float(row.get("f2"))
+            code = code6(row.get("f12"))
+            if price <= 0 or not code:
+                continue
+            quotes.append(
+                Quote(
+                    code=code,
+                    name=str(row.get("f14") or code),
+                    price=price,
+                    open=_float(row.get("f17")),
+                    previous_close=_float(row.get("f18")),
+                    high=_float(row.get("f15")),
+                    low=_float(row.get("f16")),
+                    volume=_float(row.get("f5")) * 100,
+                    amount=_float(row.get("f6")),
+                    timestamp=_format_eastmoney_timestamp(row.get("f124")),
+                )
+            )
+        return quotes
+
+
+class CombinedQuoteProvider:
+    name = "combined"
+
+    def __init__(self, providers: list[QuoteProvider]) -> None:
+        if not providers:
+            raise ValueError("providers must not be empty")
+        self.providers = providers
+
+    def fetch(self, codes: list[str], state_log: Path | None = None) -> list[Quote]:
+        errors: list[str] = []
+        for provider in self.providers:
+            try:
+                quotes = provider.fetch(codes)
+            except Exception as exc:
+                message = f"quote provider failed provider={provider.name} error={type(exc).__name__}: {exc}"
+                errors.append(message)
+                _append_state_log(state_log, message)
+                continue
+            if quotes:
+                _append_state_log(state_log, f"quote provider ok provider={provider.name} count={len(quotes)}")
+                return quotes
+            message = f"quote provider empty provider={provider.name}"
+            errors.append(message)
+            _append_state_log(state_log, message)
+        raise RuntimeError("; ".join(errors) if errors else "no quote provider returned data")
 
 
 class RealtimeDecisionEngine:
@@ -193,21 +278,30 @@ class RealtimeDecisionEngine:
 def poll_realtime_once(
     *,
     codes: list[str],
-    provider: SinaQuoteProvider,
+    provider: QuoteProvider,
     sender: ReliableWeChatSender,
     engine: RealtimeDecisionEngine,
     state_log: Path | None = None,
 ) -> None:
     try:
-        quotes = provider.fetch(codes)
+        if isinstance(provider, CombinedQuoteProvider):
+            quotes = provider.fetch(codes, state_log=state_log)
+        else:
+            quotes = provider.fetch(codes)
     except Exception as exc:
-        if state_log is not None:
-            state_log.parent.mkdir(parents=True, exist_ok=True)
-            state_log.write_text(
-                f"quote fetch error: {type(exc).__name__}: {exc}\n",
-                encoding="utf-8",
-            )
+        _append_state_log(state_log, f"quote fetch error: {type(exc).__name__}: {exc}")
         return
+    found_codes = {quote.code for quote in quotes}
+    expected_codes = [str(code).zfill(6) for code in codes]
+    missing = [code for code in expected_codes if code not in found_codes]
+    if missing:
+        _append_state_log(
+            state_log,
+            f"quote fetch partial count={len(quotes)} expected={len(expected_codes)} missing={','.join(missing)}",
+        )
+    else:
+        latest = max((quote.timestamp for quote in quotes), default="")
+        _append_state_log(state_log, f"quote fetch ok count={len(quotes)} latest={latest}")
     for quote in quotes:
         decision = engine.on_quote(quote)
         if decision is not None:
@@ -217,7 +311,7 @@ def poll_realtime_once(
 def run_realtime_monitor(
     *,
     codes: list[str],
-    provider: SinaQuoteProvider,
+    provider: QuoteProvider,
     sender: ReliableWeChatSender,
     poll_seconds: float = 1.0,
     state_log: Path | None = None,
@@ -240,3 +334,32 @@ def _float(value: str) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def code6(value: object) -> str:
+    text = str(value or "").strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text.zfill(6) if text else ""
+
+
+def _eastmoney_symbol(code: str) -> str:
+    code = str(code).zfill(6)
+    market = "1" if code.startswith(("5", "6", "9")) else "0"
+    return f"{market}.{code}"
+
+
+def _format_eastmoney_timestamp(value: object) -> str:
+    try:
+        return datetime.fromtimestamp(int(value)).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _append_state_log(path: Path | None, message: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{now} {message}\n")
