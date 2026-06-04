@@ -102,6 +102,55 @@ class RealtimeTradingTest(unittest.TestCase):
             self.assertIn("quote provider failed provider=sina", log_text)
             self.assertIn("quote provider ok provider=eastmoney count=1", log_text)
 
+    def test_combined_quote_provider_fills_missing_codes_from_backup_provider(self) -> None:
+        class PartialProvider:
+            name = "sina"
+
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                return [
+                    Quote(
+                        code="600498",
+                        name="烽火通信",
+                        price=52.97,
+                        open=51.1,
+                        previous_close=52.02,
+                        high=53.99,
+                        low=50.98,
+                        volume=68132920,
+                        amount=3608661942,
+                        timestamp="2026-06-04 11:30:00",
+                    )
+                ]
+
+        class BackupProvider:
+            name = "eastmoney"
+
+            def fetch(self, codes: list[str]) -> list[Quote]:
+                return [
+                    Quote(
+                        code=code,
+                        name=f"股票{code}",
+                        price=10.0,
+                        open=9.8,
+                        previous_close=9.9,
+                        high=10.2,
+                        low=9.7,
+                        volume=1000,
+                        amount=10_000,
+                        timestamp="2026-06-04 11:30:00",
+                    )
+                    for code in codes
+                ]
+
+        with TemporaryDirectory() as tmp:
+            provider = CombinedQuoteProvider([PartialProvider(), BackupProvider()])
+            quotes = provider.fetch(["600498", "688820", "300803"], state_log=Path(tmp) / "provider.log")
+
+            self.assertEqual([quote.code for quote in quotes], ["600498", "688820", "300803"])
+            log_text = (Path(tmp) / "provider.log").read_text(encoding="utf-8")
+            self.assertIn("quote provider partial provider=sina count=1 missing=688820,300803", log_text)
+            self.assertIn("quote provider filled provider=eastmoney count=2 total=3", log_text)
+
     def test_poll_realtime_once_logs_missing_codes_when_provider_returns_partial_data(self) -> None:
         class PartialProvider:
             def fetch(self, codes: list[str]) -> list[Quote]:
@@ -175,6 +224,18 @@ class RealtimeTradingTest(unittest.TestCase):
         self.assertEqual(quotes[0].name, "烽火通信")
         self.assertEqual(quotes[0].price, 52.97)
         self.assertEqual(quotes[0].volume, 68132900)
+
+    def test_eastmoney_provider_reports_malformed_json_cleanly(self) -> None:
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list[str]:
+                return ["bad payload"]
+
+        with unittest.mock.patch("stock_ai.realtime.requests.get", return_value=FakeResponse()):
+            with self.assertRaisesRegex(RuntimeError, "eastmoney malformed response"):
+                EastMoneyQuoteProvider().fetch(["600498"])
 
 
 class RecommendationTest(unittest.TestCase):

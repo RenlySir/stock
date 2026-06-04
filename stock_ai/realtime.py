@@ -132,9 +132,16 @@ class EastMoneyQuoteProvider:
         )
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("eastmoney malformed response")
         if int(payload.get("rc", -1)) != 0:
             raise RuntimeError(f"eastmoney rc={payload.get('rc')}")
-        rows = payload.get("data", {}).get("diff", []) if isinstance(payload.get("data"), dict) else []
+        data = payload.get("data")
+        if data is not None and not isinstance(data, dict):
+            raise RuntimeError("eastmoney malformed response")
+        rows = data.get("diff", []) if isinstance(data, dict) else []
+        if not isinstance(rows, list):
+            raise RuntimeError("eastmoney malformed response")
         quotes = []
         for row in rows:
             if not isinstance(row, dict):
@@ -170,20 +177,41 @@ class CombinedQuoteProvider:
 
     def fetch(self, codes: list[str], state_log: Path | None = None) -> list[Quote]:
         errors: list[str] = []
+        expected_codes = [code6(code) for code in codes if code6(code)]
+        collected: dict[str, Quote] = {}
         for provider in self.providers:
+            missing_codes = [code for code in expected_codes if code not in collected]
+            if not missing_codes:
+                break
             try:
-                quotes = provider.fetch(codes)
+                quotes = provider.fetch(missing_codes)
             except Exception as exc:
                 message = f"quote provider failed provider={provider.name} error={type(exc).__name__}: {exc}"
                 errors.append(message)
                 _append_state_log(state_log, message)
                 continue
-            if quotes:
-                _append_state_log(state_log, f"quote provider ok provider={provider.name} count={len(quotes)}")
-                return quotes
+            usable_quotes = [quote for quote in quotes if quote.code in missing_codes]
+            for quote in usable_quotes:
+                collected.setdefault(quote.code, quote)
+            still_missing = [code for code in expected_codes if code not in collected]
+            if usable_quotes and not still_missing:
+                message = (
+                    f"quote provider ok provider={provider.name} count={len(usable_quotes)}"
+                    if len(collected) == len(usable_quotes)
+                    else f"quote provider filled provider={provider.name} count={len(usable_quotes)} total={len(collected)}"
+                )
+                _append_state_log(state_log, message)
+                break
+            if usable_quotes:
+                message = f"quote provider partial provider={provider.name} count={len(usable_quotes)} missing={','.join(still_missing)}"
+                errors.append(message)
+                _append_state_log(state_log, message)
+                continue
             message = f"quote provider empty provider={provider.name}"
             errors.append(message)
             _append_state_log(state_log, message)
+        if collected:
+            return [collected[code] for code in expected_codes if code in collected]
         raise RuntimeError("; ".join(errors) if errors else "no quote provider returned data")
 
 
