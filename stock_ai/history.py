@@ -12,17 +12,27 @@ from .realtime import market_symbol
 def load_or_fetch_histories(codes: list[str], *, start_date: str, end_date: str, cache_dir: Path) -> pd.DataFrame:
     cache_dir.mkdir(parents=True, exist_ok=True)
     frames = []
+    errors: list[str] = []
     for code in codes:
         path = cache_dir / f"hist_{code}_{start_date}_{end_date}.csv"
-        if path.exists():
-            frames.append(pd.read_csv(path, dtype={"code": str}))
+        try:
+            if path.exists():
+                frames.append(pd.read_csv(path, dtype={"code": str}))
+                continue
+            frame = fetch_sina_daily(code, start_date=start_date, end_date=end_date)
+            frame.to_csv(path, index=False)
+            frames.append(frame)
+        except Exception as exc:
+            errors.append(f"{code}: {exc}")
             continue
-        frame = fetch_sina_daily(code, start_date=start_date, end_date=end_date)
-        frame.to_csv(path, index=False)
-        frames.append(frame)
     if not frames:
+        if errors:
+            raise ValueError("no historical rows fetched; " + "; ".join(errors))
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    out = pd.concat(frames, ignore_index=True)
+    if errors:
+        out.attrs["fetch_errors"] = errors
+    return out
 
 
 def fetch_sina_daily(code: str, *, start_date: str, end_date: str) -> pd.DataFrame:
@@ -30,9 +40,15 @@ def fetch_sina_daily(code: str, *, start_date: str, end_date: str) -> pd.DataFra
     if not ak_frame.empty:
         return ak_frame
     url = "https://finance.sina.com.cn/realstock/company/{}/hisdata/klc_kl.js".format(market_symbol(code))
-    response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-    response.raise_for_status()
-    text = response.text
+    try:
+        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        text = response.text
+    except Exception as exc:
+        eastmoney_frame = _fetch_eastmoney_daily(code, start_date=start_date, end_date=end_date)
+        if not eastmoney_frame.empty:
+            return eastmoney_frame
+        raise ValueError(f"no historical rows fetched for {code}; sina error: {exc}") from exc
     # Fallback: use a small synthetic-like empty frame when Sina historical endpoint format changes.
     # The real-time monitor remains live through hq.sinajs.cn.
     rows = []
@@ -63,8 +79,68 @@ def fetch_sina_daily(code: str, *, start_date: str, end_date: str) -> pd.DataFra
         )
     out = pd.DataFrame(rows)
     if out.empty:
+        eastmoney_frame = _fetch_eastmoney_daily(code, start_date=start_date, end_date=end_date)
+        if not eastmoney_frame.empty:
+            return eastmoney_frame
         raise ValueError(f"no historical rows fetched for {code}")
     return out.sort_values("date")
+
+
+def _fetch_eastmoney_daily(code: str, *, start_date: str, end_date: str) -> pd.DataFrame:
+    secid = _eastmoney_secid(code)
+    response = requests.get(
+        "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+        params={
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101",
+            "fqt": "0",
+            "beg": start_date.replace("-", ""),
+            "end": end_date.replace("-", ""),
+        },
+        timeout=10,
+        headers={"Referer": "https://quote.eastmoney.com/", "User-Agent": "Mozilla/5.0"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or int(payload.get("rc", -1)) != 0:
+        return pd.DataFrame()
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return pd.DataFrame()
+    klines = data.get("klines", [])
+    if not isinstance(klines, list):
+        return pd.DataFrame()
+    rows = []
+    name = str(data.get("name") or code)
+    for item in klines:
+        parts = str(item).split(",")
+        if len(parts) < 7:
+            continue
+        day = parts[0]
+        if not (start_date <= day <= end_date):
+            continue
+        rows.append(
+            {
+                "date": day,
+                "code": str(code).zfill(6),
+                "name": name,
+                "open": _num(parts[1]),
+                "close": _num(parts[2]),
+                "high": _num(parts[3]),
+                "low": _num(parts[4]),
+                "volume": _num(parts[5]) * 100,
+                "amount": _num(parts[6]),
+                "pe": 0,
+                "pb": 0,
+                "roe": 0,
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.dropna(subset=["open", "high", "low", "close"]).sort_values("date")
 
 
 def _fetch_akshare_daily(code: str, *, start_date: str, end_date: str) -> pd.DataFrame:
@@ -104,6 +180,12 @@ def _fetch_akshare_daily(code: str, *, start_date: str, end_date: str) -> pd.Dat
 
 def default_history_end() -> str:
     return date.today().strftime("%Y-%m-%d")
+
+
+def _eastmoney_secid(code: str) -> str:
+    code = str(code).zfill(6)
+    market = "1" if code.startswith(("5", "6", "9")) else "0"
+    return f"{market}.{code}"
 
 
 def _num(value: str) -> float:

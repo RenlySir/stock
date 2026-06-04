@@ -13,10 +13,42 @@ from .notifier import ReliableWeChatSender
 from .operators import evolve_operators, save_operator_evolution
 from .optimizer import optimize_strategy
 from .realtime import DEFAULT_REALTIME_CODES, CombinedQuoteProvider, EastMoneyQuoteProvider, SinaQuoteProvider, run_realtime_monitor
-from .recommendation import recommend_one_stock
+from .recommendation import StockRecommendation, recommend_one_stock
 from .reports import format_trade_alerts, format_wechat_summary, save_backtest_outputs, save_optimization_outputs
 from .storage import StockDatabase
 from .strategy import StrategyConfig, select_candidates
+
+
+def _flush_summary(flushed: object) -> str:
+    return (
+        f"sent={getattr(flushed, 'sent', 0)} failed={getattr(flushed, 'failed', 0)} "
+        f"skipped={getattr(flushed, 'skipped', 0)} quarantined={getattr(flushed, 'quarantined', 0)}"
+    )
+
+
+def _refresh_or_keep_existing_histories(
+    codes: list[str],
+    *,
+    existing_bars: pd.DataFrame,
+    history_start: str,
+    as_of: str,
+    cache_dir: Path,
+) -> tuple[pd.DataFrame, str]:
+    try:
+        refreshed = load_or_fetch_histories(
+            codes,
+            start_date=history_start,
+            end_date=as_of if as_of else default_history_end(),
+            cache_dir=cache_dir,
+        )
+    except Exception as exc:
+        if existing_bars is not None and not existing_bars.empty:
+            return existing_bars.copy(), f"历史刷新失败，使用本地缓存：{exc}"
+        raise
+    errors = refreshed.attrs.get("fetch_errors", [])
+    if errors:
+        return refreshed, "部分股票历史刷新失败：" + "；".join(str(error) for error in errors)
+    return refreshed, ""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -159,7 +191,7 @@ def main() -> int:
                 outbox_dir=Path(args.wechat_outbox),
             )
             flushed = sender.flush_outbox()
-            print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
+            print(f"wechat outbox flushed: {_flush_summary(flushed)}")
             for alert in format_trade_alerts(result, args.end_date):
                 ok = sender.send_or_queue(alert, kind="trade")
                 print(f"wechat trade alert {'sent' if ok else 'queued'}")
@@ -242,7 +274,7 @@ def main() -> int:
             outbox_dir=Path(args.wechat_outbox),
         )
         flushed = sender.flush_outbox()
-        print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
+        print(f"wechat outbox flushed: {_flush_summary(flushed)}")
         for alert in format_trade_alerts(result, args.end_date):
             ok = sender.send_or_queue(alert, kind="trade")
             print(f"wechat trade alert {'sent' if ok else 'queued'}")
@@ -271,15 +303,24 @@ def main() -> int:
         db = StockDatabase(Path(args.db_path))
         db_bars = db.load_daily_bars(codes, start_date=args.history_start, end_date=args.as_of)
         fixed_bars = db_bars if not db_bars.empty else bars[bars["code"].astype(str).str.zfill(6).isin(codes)]
+        history_note = ""
         if fixed_bars.empty or fixed_bars["date"].max() < args.as_of:
-            fixed_bars = load_or_fetch_histories(
+            fixed_bars, history_note = _refresh_or_keep_existing_histories(
                 codes,
-                start_date=args.history_start,
-                end_date=args.as_of if args.as_of else default_history_end(),
+                existing_bars=fixed_bars,
+                history_start=args.history_start,
+                as_of=args.as_of,
                 cache_dir=Path(args.history_cache_dir),
             )
             db.upsert_daily_bars(fixed_bars)
         rec = recommend_one_stock(fixed_bars, codes, as_of=args.as_of, operator_weights_path=args.operator_weights)
+        if history_note:
+            rec = StockRecommendation(
+                code=rec.code,
+                name=rec.name,
+                score=rec.score,
+                message=f"{rec.message}\n数据提示：{history_note}",
+            )
         db.save_recommendation(as_of=args.as_of, recommendation=rec)
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,7 +333,7 @@ def main() -> int:
             outbox_dir=Path(args.wechat_outbox),
         )
         flushed = sender.flush_outbox()
-        print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
+        print(f"wechat outbox flushed: {_flush_summary(flushed)}")
         ok = sender.send_or_queue(rec.message, kind="recommendation")
         print(f"wechat recommendation {'sent' if ok else 'queued'}")
         return 0
@@ -315,7 +356,7 @@ def main() -> int:
             outbox_dir=Path(args.wechat_outbox),
         )
         flushed = sender.flush_outbox()
-        print(f"wechat outbox flushed: sent={flushed.sent} failed={flushed.failed}")
+        print(f"wechat outbox flushed: {_flush_summary(flushed)}")
         return 0
     raise ValueError(args.command)
 
